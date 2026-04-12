@@ -1,0 +1,165 @@
+version: "3.9"
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    environment:
+      POSTGRES_DB: apitrak
+      POSTGRES_USER: apitrak
+      POSTGRES_PASSWORD: apitrak_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U apitrak" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── FastAPI Ingestion Service ────────────────────────────────────────────────
+
+  fastapi-ingestion:
+    build:
+      context: .
+      dockerfile: fastapi-ingestion/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      REDIS_MAX_CONNECTIONS: "50"
+      RATE_LIMIT_PER_MINUTE: "120"
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Django Core ──────────────────────────────────────────────────────────────
+
+  django-core:
+    build:
+      context: .
+      dockerfile: django-core/Dockerfile
+    command: uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgis://apitrak:apitrak_dev_password@postgres:5432/apitrak
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-dev-secret-change-in-production
+      GDAL_LIBRARY_PATH: ""
+      GEOS_LIBRARY_PATH: ""
+      CONDA_ENV_PATH: ""
+    volumes:
+      - ./django-core:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery Workers ───────────────────────────────────────────────────────────
+
+  celery-worker-cold-write:
+    build:
+      context: .
+      dockerfile: django-core/Dockerfile
+    command: celery -A config.celery worker -Q cold_write -c 4 --loglevel=info
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgis://apitrak:apitrak_dev_password@postgres:5432/apitrak
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-dev-secret-change-in-production
+      GDAL_LIBRARY_PATH: ""
+      GEOS_LIBRARY_PATH: ""
+      CONDA_ENV_PATH: ""
+    volumes:
+      - ./django-core:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery-worker-geofences:
+    build:
+      context: .
+      dockerfile: django-core/Dockerfile
+    command: celery -A config.celery worker -Q geofences -c 2 --loglevel=info
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgis://apitrak:apitrak_dev_password@postgres:5432/apitrak
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-dev-secret-change-in-production
+      GDAL_LIBRARY_PATH: ""
+      GEOS_LIBRARY_PATH: ""
+      CONDA_ENV_PATH: ""
+    volumes:
+      - ./django-core:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: django-core/Dockerfile
+    command: celery -A config.celery beat --loglevel=info
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgis://apitrak:apitrak_dev_password@postgres:5432/apitrak
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: django-insecure-dev-secret-change-in-production
+      GDAL_LIBRARY_PATH: ""
+      GEOS_LIBRARY_PATH: ""
+      CONDA_ENV_PATH: ""
+    volumes:
+      - ./django-core:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── React Frontend ───────────────────────────────────────────────────────────
+
+  react-frontend:
+    build:
+      context: react-frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./react-frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: "http://localhost:8000"
+      VITE_WS_URL: "ws://localhost:8000"
+    depends_on:
+      - django-core
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

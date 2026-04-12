@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apitrak-shared"
+version = "0.1.0"
+description = "Shared Redis key schema for Apitrak services"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["shared*"]

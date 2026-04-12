@@ -1,0 +1,65 @@
+import { useEffect, useRef, useCallback } from "react";
+import type { WsMessage } from "../types";
+
+const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8000";
+
+const INITIAL_RETRY_MS = 1_000;
+const MAX_RETRY_MS = 30_000;
+
+export function useWebSocket(
+    orgId: string | null,
+    orgToken: string | null,
+    onMessage: (msg: WsMessage) => void,
+) {
+    const wsRef = useRef<WebSocket | null>(null);
+    const retryDelayRef = useRef(INITIAL_RETRY_MS);
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const onMessageRef = useRef(onMessage);
+    onMessageRef.current = onMessage;
+
+    const connect = useCallback(() => {
+        if (!orgId || !orgToken) return;
+
+        const url = `${WS_URL}/ws/tracking/${orgId}/?token=${encodeURIComponent(orgToken)}`;
+        const ws = new WebSocket(url);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+            retryDelayRef.current = INITIAL_RETRY_MS;
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data as string) as WsMessage;
+                onMessageRef.current(msg);
+            } catch {
+                // ignore malformed messages
+            }
+        };
+
+        ws.onclose = () => {
+            wsRef.current = null;
+            if (!orgId || !orgToken) return;
+            retryTimerRef.current = setTimeout(() => {
+                retryDelayRef.current = Math.min(retryDelayRef.current * 2, MAX_RETRY_MS);
+                connect();
+            }, retryDelayRef.current);
+        };
+
+        ws.onerror = () => {
+            ws.close();
+        };
+    }, [orgId, orgToken]);
+
+    useEffect(() => {
+        connect();
+        return () => {
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            if (wsRef.current) {
+                // Prevent reconnect on intentional close
+                wsRef.current.onclose = null;
+                wsRef.current.close();
+            }
+        };
+    }, [connect]);
+}

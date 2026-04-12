@@ -1,0 +1,18 @@
+# Ignore local environment files — they contain Windows-specific paths (GDAL, GEOS, etc.)
+# that are invalid inside the Linux container.
+django-core/.env
+fastapi-ingestion/.env
+.env
+
+# Python cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Node modules (avoid pulling them into django/fastapi build contexts)
+react-frontend/node_modules
+react-frontend/dist
+
+# Git
+.git
+.gitignore

@@ -1,0 +1,57 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# ── Django ────────────────────────────────────────────────────────────────────
+*.log
+local_settings.py
+db.sqlite3
+django-core/staticfiles/
+django-core/celerybeat-schedule
+django-core/celerybeat.pid
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node / React ──────────────────────────────────────────────────────────────
+node_modules/
+react-frontend/node_modules/
+react-frontend/dist/
+react-frontend/.vite/
+react-frontend/coverage/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# (docker-compose.yml and Dockerfiles are intentionally tracked)
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Shared package build artefacts ───────────────────────────────────────────
+apitrak_shared.egg-info/
+shared/apitrak_shared.egg-info/
