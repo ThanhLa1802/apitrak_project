@@ -21,6 +21,29 @@ from shared.redis_keys import (
 
 router = APIRouter()
 
+# Lua script: atomically update hot-storage only when the incoming timestamp
+# is strictly newer than whatever is already stored.
+# ISO-8601 strings with the same timezone are lexicographically comparable,
+# so a plain string comparison is correct and avoids any datetime parsing in Lua.
+#
+# KEYS[1] = pos_key  (e.g. "device:{uuid}:position")
+# ARGV[1] = ttl      (seconds, as string)
+# ARGV[2] = incoming timestamp (ISO-8601)
+# ARGV[3..] = flat field/value pairs for HSET
+_HSET_IF_NEWER_SCRIPT = """
+local current_ts = redis.call('HGET', KEYS[1], 'timestamp')
+if (not current_ts) or (ARGV[2] > current_ts) then
+    local fields = {}
+    for i = 3, #ARGV do
+        fields[#fields + 1] = ARGV[i]
+    end
+    redis.call('HSET', KEYS[1], unpack(fields))
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+    return 1
+end
+return 0
+"""
+
 
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_telemetry(
@@ -31,10 +54,11 @@ async def ingest_telemetry(
     """
     Receive a telemetry event from an IoT device.
 
-    Fast path (single Redis round-trip via pipeline):
-      1. HSET  device:{id}:position   — Hot Storage update
-      2. EXPIRE device:{id}:position  — TTL = 2× ping interval
-      3. XADD  telemetry_stream       — Publish for Channels + Celery consumers
+    1. EVAL  _HSET_IF_NEWER_SCRIPT — atomically update Hot Storage only if
+             the incoming timestamp is newer than the stored one (guards against
+             out-of-order delivery overwriting a more recent position).
+    2. XADD  telemetry_stream      — always publish to stream so cold storage
+             and geofence evaluation receive every event regardless of order.
     """
     pos_key = device_position_key(device.device_id)
     ts_iso = payload.timestamp.isoformat()
@@ -55,9 +79,20 @@ async def ingest_telemetry(
         STREAM_FIELD_BATTERY: str(payload.battery) if payload.battery is not None else "",
     }
 
+    # Build flat ARGV list: ttl, timestamp, then field/value pairs
+    flat_fields: list[str] = []
+    for k, v in position_fields.items():
+        flat_fields.extend([k, v])
+
     pipe = redis.pipeline()
-    pipe.hset(pos_key, mapping=position_fields)
-    pipe.expire(pos_key, POSITION_TTL_SECONDS)
+    pipe.eval(
+        _HSET_IF_NEWER_SCRIPT,
+        1,           # numkeys
+        pos_key,     # KEYS[1]
+        str(POSITION_TTL_SECONDS),  # ARGV[1]
+        ts_iso,      # ARGV[2]
+        *flat_fields,               # ARGV[3..]
+    )
     pipe.xadd(TELEMETRY_STREAM, stream_fields)
     await pipe.execute()
 

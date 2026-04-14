@@ -55,3 +55,4 @@ htmlcov/
 # ── Shared package build artefacts ───────────────────────────────────────────
 apitrak_shared.egg-info/
 shared/apitrak_shared.egg-info/
+.github/

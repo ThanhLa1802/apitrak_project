@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useAuthStore } from "../store/authStore";
 import { useWebSocket } from "./useWebSocket";
-import type { LiveMapResponse, LivePosition, WsMessage } from "../types";
+import type { LiveMapResponse, LivePosition, OrgScopeTokenResponse, WsMessage } from "../types";
 
 export function useLivePositions(
     orgId: string | null,
@@ -61,7 +62,22 @@ export function useLivePositions(
         }
     };
 
-    useWebSocket(orgId, orgToken, handleMessage);
+    const { setOrgContext, orgName } = useAuthStore();
+
+    // Called by useWebSocket when org token is rejected (expired).
+    // Silently re-issues the org-scope JWT using the still-valid access token.
+    // If the access token is also expired, api.ts will attempt a refresh;
+    // if that fails too, it calls logout() automatically.
+    const handleTokenExpired = useCallback(async () => {
+        if (!orgId || !orgName) return;
+        const { data } = await api.post<OrgScopeTokenResponse>(
+            "/api/v1/token/org-scope/",
+            { org_id: orgId },
+        );
+        setOrgContext(orgId, orgName, data.token);
+    }, [orgId, orgName, setOrgContext]);
+
+    useWebSocket(orgId, orgToken, handleMessage, handleTokenExpired);
 
     return { positions, geofenceAlerts };
 }

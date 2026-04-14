@@ -1,9 +1,35 @@
 import { useEffect, useRef } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { createDeviceIcon, fmt, formatTs } from "./DeviceMarker";
 import TrackLayer from "./TrackLayer";
 import type { Device, Asset, LivePosition, LocationRecordFeature } from "../../types";
+
+// ── Persist map view across page reloads ─────────────────────────────────────
+
+const MAP_VIEW_KEY = "apitrak:map-view";
+
+interface SavedView { lat: number; lng: number; zoom: number; }
+
+function readSavedView(): SavedView | null {
+    try {
+        const raw = localStorage.getItem(MAP_VIEW_KEY);
+        return raw ? (JSON.parse(raw) as SavedView) : null;
+    } catch {
+        return null;
+    }
+}
+
+function MapViewPersister() {
+    useMapEvents({
+        moveend(e) {
+            const { lat, lng } = e.target.getCenter();
+            const zoom = e.target.getZoom();
+            localStorage.setItem(MAP_VIEW_KEY, JSON.stringify({ lat, lng, zoom }));
+        },
+    });
+    return null;
+}
 
 // ── Geofence overlay component ───────────────────────────────────────────────
 
@@ -88,7 +114,9 @@ interface Props {
     showGeofences: boolean;
 }
 
-const MAP_CENTER: [number, number] = [20, 0];
+const DEFAULT_CENTER: [number, number] = [20, 0];
+const DEFAULT_ZOOM = 3;
+const DEVICE_ZOOM = 15;
 
 export default function LiveMap({
     positions,
@@ -100,26 +128,33 @@ export default function LiveMap({
     showGeofences,
 }: Props) {
     const mapRef = useRef<L.Map | null>(null);
+    // Keep a ref so the flyTo effect can read the latest positions
+    // without adding positions to the dep array (which would re-fly on every ping)
+    const positionsRef = useRef(positions);
+    positionsRef.current = positions;
 
-    // Auto-pan to selected device
+    // Fly to device ONCE when selectedDeviceId changes, not on every ping
     useEffect(() => {
         if (!selectedDeviceId || !mapRef.current) return;
-        const pos = positions.get(selectedDeviceId);
+        const pos = positionsRef.current.get(selectedDeviceId);
         if (!pos) return;
         const lat = parseFloat(pos.lat);
         const lng = parseFloat(pos.lng);
         if (!isNaN(lat) && !isNaN(lng)) {
-            mapRef.current.panTo([lat, lng]);
+            mapRef.current.flyTo([lat, lng], DEVICE_ZOOM, { duration: 1.2 });
         }
-    }, [selectedDeviceId, positions]);
+    }, [selectedDeviceId]);
+
+    const saved = readSavedView();
 
     return (
         <MapContainer
-            center={MAP_CENTER}
-            zoom={3}
+            center={saved ? [saved.lat, saved.lng] : DEFAULT_CENTER}
+            zoom={saved ? saved.zoom : DEFAULT_ZOOM}
             className="h-full w-full"
             ref={mapRef}
         >
+            <MapViewPersister />
             <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>'

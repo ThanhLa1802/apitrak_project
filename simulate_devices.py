@@ -22,7 +22,7 @@ PING_INTERVAL: float = float(os.getenv("PING_INTERVAL", "3"))
 
 # Add one entry per device. api_key = raw key you typed when creating the device.
 DEVICES: list[dict] = [
-    {"api_key": "test-key", "label": "Device 1"},
+    {"api_key": "test-key2", "label": "Device 1"},
     # {"api_key": "REPLACE_WITH_YOUR_API_KEY_2", "label": "Device 2"},
 ]
 
