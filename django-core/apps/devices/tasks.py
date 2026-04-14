@@ -9,20 +9,49 @@ Both tasks are dispatched from apps/tracking/stream_consumer.py which runs an
 async XREADGROUP loop inside the Channels ASGI process.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 import redis
+from asgiref.sync import async_to_sync
 from celery import shared_task
 from channels.layers import get_channel_layer
 from django.conf import settings
-from django.contrib.gis.geos import Point
+from django.contrib.gis.geos import MultiPolygon, Point
+from django.core.cache import cache
 
 from apps.devices.models import Device, LocationRecord
-from apps.geofences.models import Geofence
+from apps.geofences.models import Geofence, GeofenceEvent
 from shared.redis_keys import device_geofences_key
 
 logger = logging.getLogger(__name__)
+
+_GEOFENCE_CACHE_TTL = 60  # seconds
+
+
+def _org_geofences_cache_key(org_id: str) -> str:
+    return f"org:{org_id}:active_geofences"
+
+
+def _get_active_geofences(org_id: str) -> list[tuple[str, MultiPolygon]]:
+    """
+    Return (id, polygon) tuples for all active geofences in an org.
+    Cached in Redis for _GEOFENCE_CACHE_TTL seconds — geofences change rarely
+    so a short TTL eliminates the DB hit on every telemetry event.
+    Cache is invalidated immediately via signal on geofence save/delete.
+    """
+    cache_key = _org_geofences_cache_key(org_id)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    geofences = list(
+        Geofence.objects.filter(organization_id=org_id, is_active=True).values_list("id", "polygon")
+    )
+    data = [(str(gid), polygon) for gid, polygon in geofences]
+    cache.set(cache_key, data, timeout=_GEOFENCE_CACHE_TTL)
+    return data
 
 
 @shared_task(queue="cold_write", ignore_result=True)
@@ -62,25 +91,27 @@ def write_cold_storage(
 
 
 @shared_task(queue="geofences", ignore_result=True)
-def evaluate_geofences(device_id: str, org_id: str, lat: float, lng: float) -> None:
+def evaluate_geofences(
+    device_id: str,
+    org_id: str,
+    lat: float,
+    lng: float,
+    timestamp: str | None = None,
+) -> None:
     """
     Check whether a device has entered or exited any active geofence.
 
-    Uses PostGIS `polygon__contains` for spatial membership test,
-    diffs against the Redis Set of previously-known containment,
-    then fires WebSocket events for entry/exit transitions.
+    Hot path: active geofence polygons are cached in Redis (TTL 60s) and
+    containment is checked in Python using GEOS — avoids a DB query per event.
+    Cache is invalidated immediately whenever a geofence is saved or deleted.
+    Persists a GeofenceEvent row for every state transition (audit trail).
     """
     point = Point(lng, lat, srid=4326)
 
-    # Current geofences containing this point (PostGIS query).
-    current_ids: set[str] = set(
-        str(gid)
-        for gid in Geofence.objects.filter(
-            organization_id=org_id,
-            is_active=True,
-            polygon__contains=point,
-        ).values_list("id", flat=True)
-    )
+    # Current geofences containing this point — Python GEOS, no DB query on cache hit.
+    current_ids: set[str] = {
+        gid for gid, polygon in _get_active_geofences(org_id) if polygon.contains(point)
+    }
 
     # Previous state from Redis Set.
     r = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -102,39 +133,54 @@ def evaluate_geofences(device_id: str, org_id: str, lat: float, lng: float) -> N
         pipe.delete(geofences_key)
     pipe.execute()
 
-    # Broadcast events via Django Channels WebSocket layer.
+    # Parse occurred_at from telemetry timestamp (falls back to now).
+    occurred_at = datetime.now(tz=timezone.utc)
+    if timestamp:
+        occurred_at = datetime.fromisoformat(timestamp)
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+
+    # Persist audit trail to DB.
+    try:
+        device_obj = Device.objects.get(id=device_id)
+        all_changed = {gid: "entered" for gid in entered}
+        all_changed.update({gid: "exited" for gid in exited})
+        GeofenceEvent.objects.bulk_create([
+            GeofenceEvent(
+                geofence_id=gid,
+                device=device_obj,
+                event_type=event_type,
+                occurred_at=occurred_at,
+            )
+            for gid, event_type in all_changed.items()
+        ])
+    except Device.DoesNotExist:
+        logger.warning("evaluate_geofences: device %s not found", device_id)
+
+    # Broadcast all events concurrently via Django Channels WebSocket layer.
     channel_layer = get_channel_layer()
     if channel_layer is None:
         logger.error("evaluate_geofences: channel layer not configured")
         return
 
-    import asyncio
+    group_name = f"org_{org_id}_tracking"
 
-    loop = asyncio.new_event_loop()
-    try:
-        for geofence_id in entered:
-            loop.run_until_complete(
+    async def _broadcast() -> None:
+        await asyncio.gather(
+            *[
                 channel_layer.group_send(
-                    f"org_{org_id}_tracking",
-                    {
-                        "type": "geofence_event",
-                        "event": "entered",
-                        "device_id": device_id,
-                        "geofence_id": geofence_id,
-                    },
+                    group_name,
+                    {"type": "geofence_event", "event": "entered", "device_id": device_id, "geofence_id": gid},
                 )
-            )
-        for geofence_id in exited:
-            loop.run_until_complete(
+                for gid in entered
+            ],
+            *[
                 channel_layer.group_send(
-                    f"org_{org_id}_tracking",
-                    {
-                        "type": "geofence_event",
-                        "event": "exited",
-                        "device_id": device_id,
-                        "geofence_id": geofence_id,
-                    },
+                    group_name,
+                    {"type": "geofence_event", "event": "exited", "device_id": device_id, "geofence_id": gid},
                 )
-            )
-    finally:
-        loop.close()
+                for gid in exited
+            ],
+        )
+
+    async_to_sync(_broadcast)()

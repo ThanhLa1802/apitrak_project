@@ -164,6 +164,7 @@ export default function GeofencesPage() {
             <div className="flex-1">
                 <GeofenceMap
                     geofences={geofences}
+                    selected={selected}
                     onCreated={handleCreated}
                     onDeleted={handleDeleted}
                 />

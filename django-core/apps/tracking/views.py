@@ -1,8 +1,10 @@
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.organizations.models import Organization
 from apps.tracking.hot_storage import HotStorageService
 
 
@@ -20,6 +22,8 @@ class LiveMapView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request, org_id: str) -> Response:
+        if not Organization.objects.filter(id=org_id, members=request.user).exists():
+            raise PermissionDenied()
         service = HotStorageService()
         positions = service.get_all_positions_for_org(org_id)
         return Response({"org_id": org_id, "devices": positions})

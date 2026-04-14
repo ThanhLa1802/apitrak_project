@@ -4,6 +4,21 @@ import L from "leaflet";
 import "leaflet-draw";
 import type { GeofenceFeature } from "../../types";
 
+// ── Fly-to helper ─────────────────────────────────────────────────────────────
+
+function FlyToGeofence({ selected }: { selected: GeofenceFeature | null }) {
+    const map = useMap();
+    useEffect(() => {
+        if (!selected) return;
+        const layer = L.geoJSON(selected as unknown as GeoJSON.Feature);
+        const bounds = layer.getBounds();
+        if (bounds.isValid()) {
+            map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+        }
+    }, [map, selected]);
+    return null;
+}
+
 // ── Draw control inner component ──────────────────────────────────────────────
 
 interface DrawControlProps {
@@ -92,13 +107,14 @@ function DrawControl({ geofences, onCreated, onDeleted }: DrawControlProps) {
 
 interface Props {
     geofences: GeofenceFeature[];
+    selected: GeofenceFeature | null;
     onCreated: (name: string, multipolygon: GeoJSON.MultiPolygon) => void;
     onDeleted: (id: string) => void;
 }
 
 const MAP_CENTER: [number, number] = [20, 0];
 
-export default function GeofenceMap({ geofences, onCreated, onDeleted }: Props) {
+export default function GeofenceMap({ geofences, selected, onCreated, onDeleted }: Props) {
     return (
         <MapContainer center={MAP_CENTER} zoom={3} className="h-full w-full">
             <TileLayer
@@ -110,6 +126,7 @@ export default function GeofenceMap({ geofences, onCreated, onDeleted }: Props) 
                 onCreated={onCreated}
                 onDeleted={onDeleted}
             />
+            <FlyToGeofence selected={selected} />
         </MapContainer>
     );
 }

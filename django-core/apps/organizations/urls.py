@@ -24,7 +24,9 @@ class OrganizationSerializer(ModelSerializer):
 class OrganizationViewSet(ModelViewSet):
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated]
-    queryset = Organization.objects.all()
+
+    def get_queryset(self):
+        return Organization.objects.filter(members=self.request.user)
 
 
 class OrgScopeTokenView(APIView):
@@ -40,7 +42,7 @@ class OrgScopeTokenView(APIView):
         if not org_id:
             return Response({"detail": "org_id is required."}, status=400)
         try:
-            Organization.objects.get(id=org_id)
+            Organization.objects.get(id=org_id, members=request.user)
         except (Organization.DoesNotExist, ValueError):
             return Response({"detail": "Organization not found."}, status=404)
 

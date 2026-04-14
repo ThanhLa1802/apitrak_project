@@ -8,3 +8,4 @@ class OrganizationAdmin(admin.ModelAdmin):
     list_display = ["name", "slug", "created_at"]
     search_fields = ["name", "slug"]
     ordering = ["name"]
+    filter_horizontal = ["members"]

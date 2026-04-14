@@ -28,3 +28,26 @@ class Geofence(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.organization})"
+
+#create Geofence event
+EVENT_CHOICES = [("entered", "Entered"), ("exited", "Exited")]
+
+class GeofenceEvent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    geofence = models.ForeignKey(Geofence, on_delete=models.CASCADE, related_name="events")
+    device = models.ForeignKey(
+        "devices.Device", on_delete=models.CASCADE, related_name="geofence_events"
+    )
+    event_type = models.CharField(max_length=10, choices=EVENT_CHOICES)
+    occurred_at = models.DateTimeField()   # set từ telemetry timestamp, KHÔNG auto
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-occurred_at"]
+        indexes = [
+            models.Index(fields=["device", "-occurred_at"], name="gfev_device_time_idx"),
+            models.Index(fields=["geofence", "-occurred_at"], name="gfev_fence_time_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event_type}: device {self.device_id} @ {self.geofence.name}"

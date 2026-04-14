@@ -78,6 +78,7 @@ async def _dispatch_celery_tasks(fields: dict) -> None:
         org_id=org_id,
         lat=lat,
         lng=lng,
+        timestamp=ts,
     )
 
 
